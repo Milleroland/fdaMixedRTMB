@@ -1,0 +1,19 @@
+# R build artifacts
+*.Rcheck/
+*.tar.gz
+*.Rproj.user/
+
+# R session files
+.RData
+.Rhistory
+.Rproj.user
+
+# roxygen2 cache
+/.roxygen2_cache
+
+# macOS
+.DS_Store
+
+# Installed package files (not source)
+inst/doc/*.html
+inst/doc/*.pdf

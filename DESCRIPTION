@@ -1,0 +1,37 @@
+Package: fdaMixedRTMB
+Type: Package
+Title: Operator-Based Functional Mixed Models with Boundary-Value Estimation
+Version: 0.1.0
+Authors@R: c(
+    person("Mille", "Thostrup", role = c("aut", "cre"), email = "mrt@math.ku.dk")
+  )
+Author: Mille Thostrup [aut, cre]
+Maintainer: Mille Thostrup <mrt@math.ku.dk>
+Description: Operator-based functional mixed models fit via the Markussen
+    (2013) operator-projection / trace-integral REML approximation differentiated
+    by RTMB. Supports K.order = 1 operators from fdaMixed: L f = -lambda_d2 f''
+    (pure Laplace) and L f = -lambda_d2 f'' + lambda_level f (shifted Laplace).
+    The main interface is fdaLm_rtmb(), which mirrors fdaMixed::fdaLm() and
+    accepts formulas for the fixed, random, and boundary-value regressions. The
+    user supplies left and right boundary operators; curve-specific right
+    boundary values are estimated through a null-space carrier h(t), which
+    enters as ordinary fixed-effect columns that are profiled out analytically.
+    sigma^2 and all fixed effects are eliminated from the REML objective via
+    forward-backward Green's-function projection sweeps; the REML log-determinant
+    trace contribution is approximated by fixed Gauss-Legendre quadrature of the
+    Markussen trace integral; grouped random effects are optionally marginalized
+    by an RTMB Laplace approximation; and nlminb() optimizes the outer variance
+    parameters using RTMB automatic differentiation. No latent serial-coefficient
+    block is introduced.
+License: GPL (>= 3)
+Encoding: UTF-8
+Depends: R (>= 4.1)
+Imports:
+    emmeans,
+    Formula,
+    RTMB,
+    stats
+Suggests:
+    testthat (>= 3.0.0)
+Config/testthat/edition: 3
+RoxygenNote: 7.3.3
