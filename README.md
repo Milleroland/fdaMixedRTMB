@@ -1,5 +1,12 @@
 # fdaMixedRTMB
 
+## Installation
+
+```r
+# install.packages("remotes")
+remotes::install_github("Milleroland/fdaMixedRTMB")
+```
+
 `fdaMixedRTMB` is an R package for operator-based functional mixed models fit
 with RTMB. It focuses on the `K.order = 1` operators from `fdaMixed`:
 
