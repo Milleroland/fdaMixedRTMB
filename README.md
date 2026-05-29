@@ -2,6 +2,7 @@
 
 ## Installation
 
+To install the package run the following code
 ```r
 # install.packages("remotes")
 remotes::install_github("Milleroland/fdaMixedRTMB")
