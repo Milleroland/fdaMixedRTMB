@@ -1,8 +1,8 @@
 #' Methods for boundary-value fits
 #'
 #' S3 methods for fitted boundary-value models, including standard generics
-#' from \pkg{stats} and home-grown \code{fixef}/\code{ranef} generics for
-#' compatibility with \pkg{emmeans} and the broader mixed-model ecosystem.
+#' from \pkg{stats} and a home-grown \code{fixef} generic for
+#' compatibility with \pkg{emmeans} and the broader model ecosystem.
 #'
 #' @param object A fitted `"boundary_value_fit"` object.
 #' @param x A fitted `"boundary_value_fit"` object, or its summary.
@@ -16,11 +16,11 @@
 NULL
 
 
-# These generics are also defined in nlme and lme4.  We provide our own so
+# This generic is also defined in nlme and lme4.  We provide our own so
 # that users who do not have those packages installed can still call
-# fixef(fit) and ranef(fit).  If nlme or lme4 is attached *before*
-# fdaMixedRTMB, R will mask our generic with theirs; the method
-# fixef.boundary_value_fit will still dispatch correctly in all cases.
+# fixef(fit).  If nlme or lme4 is attached *before* fdaMixedRTMB, R will
+# mask our generic with theirs; fixef.boundary_value_fit will still
+# dispatch correctly in all cases.
 
 #' Extract fixed-effect coefficients
 #'
@@ -37,31 +37,6 @@ fixef <- function(object, ...) UseMethod("fixef")
 #' @export
 fixef.boundary_value_fit <- function(object, ...) {
   object$beta
-}
-
-#' Extract random-effect estimates
-#'
-#' Returns the estimated random-effect coefficients for a fitted model object.
-#'
-#' @param object A fitted model object.
-#' @param ... Additional arguments passed to methods.
-#' @return A named numeric vector (or list) of random-effect estimates.
-#' @export
-ranef <- function(object, ...) UseMethod("ranef")
-
-#' @rdname boundary_value_fit_methods
-#' @export
-ranef.boundary_value_fit <- function(object, ...) {
-  u <- object$u_hat
-  if (length(u) == 0L) {
-    return(numeric(0L))
-  }
-  # Name the vector by curve if possible
-  if (!is.null(object$data$curve_levels) &&
-      length(u) == object$data$n_curves) {
-    names(u) <- object$data$curve_levels
-  }
-  u
 }
 
 .compact_deparse <- function(x) {
@@ -159,6 +134,23 @@ ranef.boundary_value_fit <- function(object, ...) {
   stats::setNames(out, labels)
 }
 
+.print_named_numeric <- function(x, digits, name_col = "name") {
+  if (!length(x)) {
+    return(invisible(x))
+  }
+
+  nm <- names(x)
+  if (is.null(nm)) {
+    nm <- as.character(seq_along(x))
+  }
+  out <- stats::setNames(
+    data.frame(nm, round(unname(x), digits), check.names = FALSE),
+    c(name_col, "estimate")
+  )
+  print(out, row.names = FALSE, max = nrow(out) * ncol(out))
+  invisible(x)
+}
+
 #' @rdname boundary_value_fit_methods
 #' @export
 coef.boundary_value_fit <- function(
@@ -172,12 +164,12 @@ coef.boundary_value_fit <- function(
     component,
     beta     = object$beta,
     boundary = object$boundary_coef,
-    variance = c(tau = object$tau, sigma2 = object$sigma2, sigma_u2 = object$sigma_u2),
+    variance = c(tau = object$tau, sigma2 = object$sigma2),
     rho      = object$curve_rho,
     list(
       beta     = object$beta,
       boundary = object$boundary_coef,
-      variance = c(tau = object$tau, sigma2 = object$sigma2, sigma_u2 = object$sigma_u2),
+      variance = c(tau = object$tau, sigma2 = object$sigma2),
       rho      = object$curve_rho
     )
   )
@@ -187,7 +179,7 @@ coef.boundary_value_fit <- function(
 #' @export
 predict.boundary_value_fit <- function(
   object,
-  type = c("response", "fixed", "boundary", "serial", "random", "right_derivative", "rho"),
+  type = c("response", "fixed", "boundary", "serial", "right_derivative", "rho"),
   ...
 ) {
   type <- match.arg(type)
@@ -198,7 +190,6 @@ predict.boundary_value_fit <- function(
     fixed = object$fixed_effect,
     boundary = object$boundary_effect,
     serial = object$serial_effect,
-    random = object$random_effect,
     right_derivative = object$right_boundary_derivative,
     rho = object$curve_rho
   )
@@ -224,7 +215,7 @@ summary.boundary_value_fit <- function(object, ...) {
     operator = c(tau = object$tau, lambda_d2 = object$lambda_d2,
                  lambda_level = object$lambda_level, kappa = kappa_hat),
     operator_label = object$operator$operator_label,
-    noise = c(sigma2 = object$sigma2, sigma_u2 = object$sigma_u2),
+    noise = c(sigma2 = object$sigma2),
     beta = object$beta,
     boundary_coef = object$boundary_coef,
     boundary_model = .boundary_model_label(object),
@@ -262,16 +253,13 @@ print.boundary_value_fit <- function(x, digits = 5L, ...) {
       " lambda_level:", formatC(x$lambda_level, digits = digits, format = "f"),
       " kappa:", formatC(kappa_val, digits = digits, format = "f"), "\n")
   cat("  sigma2:", formatC(x$sigma2, digits = digits, format = "f"), "\n")
-  if (ncol(x$data$Z) > 0L) {
-    cat("  sigma_u2:", formatC(x$sigma_u2, digits = digits, format = "f"), "\n")
-  }
   boundary_rho <- .boundary_model_rho(x)
   if (length(boundary_rho)) {
     cat("  rho by boundary model:\n")
-    print(round(boundary_rho, digits), quote = FALSE)
+    .print_named_numeric(boundary_rho, digits, name_col = "boundary")
   } else {
     cat("  curve-specific rho:\n")
-    print(round(x$curve_rho, digits), quote = FALSE)
+    .print_named_numeric(x$curve_rho, digits)
   }
   invisible(x)
 }
@@ -290,8 +278,7 @@ print.summary.boundary_value_fit <- function(x, digits = max(3L, getOption("digi
       " lambda_d2 =", formatC(x$operator["lambda_d2"], digits = digits, format = "f"),
       " lambda_level =", formatC(x$operator["lambda_level"], digits = digits, format = "f"),
       " kappa =", formatC(x$operator["kappa"], digits = digits, format = "f"), "\n")
-  cat("  noise:", "sigma2 =", formatC(x$noise["sigma2"], digits = digits, format = "f"),
-      "sigma_u2 =", formatC(x$noise["sigma_u2"], digits = digits, format = "f"), "\n")
+  cat("  noise:", "sigma2 =", formatC(x$noise["sigma2"], digits = digits, format = "f"), "\n")
 
   if (length(x$beta)) {
     cat("\nOrdinary fixed effects\n")
@@ -303,14 +290,14 @@ print.summary.boundary_value_fit <- function(x, digits = max(3L, getOption("digi
   }
   if (length(x$boundary_model_rho)) {
     cat("\nBoundary-model rho\n")
-    print(round(x$boundary_model_rho, digits), quote = FALSE)
+    .print_named_numeric(x$boundary_model_rho, digits, name_col = "boundary")
+  } else {
+    cat("\nCurve-specific rho\n")
+    .print_named_numeric(x$curve_rho, digits)
   }
 
-  cat("\nCurve-specific rho\n")
-  print(round(x$curve_rho, digits), quote = FALSE)
-
   cat("\nHomogeneous serial boundary check\n")
-  print(round(x$right_boundary_serial_operator, digits), quote = FALSE)
+  .print_named_numeric(x$right_boundary_serial_operator, digits)
   invisible(x)
 }
 

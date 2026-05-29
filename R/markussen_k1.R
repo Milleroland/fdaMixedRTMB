@@ -22,7 +22,7 @@
 #     introduced; the serial effect X_m(t) is recovered via the projection
 #     equations.
 #   - RTMB differentiates the outer REML objective with respect to the variance
-#     parameters (log_lambda_d2, optionally log_lambda_level and log_sigma_u2),
+#     parameters (log_lambda_d2, optionally log_lambda_level),
 #     and nlminb() optimizes using those gradients.
 #
 # Supported operators (K.order = 1):
@@ -46,7 +46,6 @@
   right_boundary,
   lambda_d2_init,
   sigma2_init,      # retained for API compatibility; sigma2 is profiled internally
-  sigma_u2_init,
   lambda_level_init,
   control,
   trace_quad_n,
@@ -54,12 +53,10 @@
 ) {
   # basic setup
   estimate_level <- isTRUE(operator$estimate_level)
-  has_random     <- ncol(prepared$Z) > 0L
   n_obs          <- length(prepared$y)
   n_fixed        <- ncol(prepared$X)   # base_X + boundary_value_design columns
 
   lambda_d2_init <- max(as.numeric(lambda_d2_init), 1e-8)
-  sigma_u2_init  <- max(as.numeric(sigma_u2_init),  1e-8)
 
   # Basic identifiability checks
   if (n_fixed >= n_obs) {
@@ -81,11 +78,9 @@
 
   # Plain R matrices passed to the RTMB tape as data
   X_full <- unname(prepared$X)   # (n_obs  x n_fixed)
-  Z_full <- unname(prepared$Z)   # (n_obs  x n_u)
   y_vec  <- prepared$y           # (n_obs)
 
-  # parameter list for RTMB 
-  
+  # parameter list for RTMB
   # Only variance parameters are free; sigma2, beta, and gamma are profiled.
   par_list <- list(
     log_lambda_d2 = log(lambda_d2_init)
@@ -93,45 +88,30 @@
   if (estimate_level) {
     par_list$log_lambda_level <- log(max(lambda_level_init, 1e-8))
   }
-  if (has_random) {
-    par_list$log_sigma_u2 <- log(sigma_u2_init)
-    par_list$u            <- stats::setNames(
-      rep(0, ncol(Z_full)),
-      colnames(prepared$Z)
-    )
-  }
 
-  # Data list fior RTMB
+  # Data list for RTMB
   data_list <- list(
     y_data = y_vec,
-    X_data = X_full,
-    Z_data = Z_full
+    X_data = X_full
   )
-
-  random_names <- if (has_random) "u" else character(0L)
 
   # RTMB objective
   # Captures (as R constants at tape time):
-  #   prepared, left_row, right_rows, estimate_level, has_random, trace_quad_n
+  #   prepared, left_row, right_rows, estimate_level, trace_quad_n
   objective <- function(parms) {
     RTMB::getAll(data_list, parms, warn = FALSE)
 
     lambda_d2    <- exp(log_lambda_d2)
     lambda_level <- if (estimate_level) exp(log_lambda_level) else 0
-    sigma_u2     <- if (has_random) exp(log_sigma_u2) else 0
-    u_val        <- if (has_random) u else numeric(0L)
 
     result <- .markussen_evaluate_k1(
       lambda_d2    = lambda_d2,
       lambda_level = lambda_level,
       y            = y_data,
       X            = X_data,
-      Z            = Z_data,
       prepared     = prepared,
       left_row     = left_row,
       right_rows   = right_rows,
-      sigma_u2     = sigma_u2,
-      u            = u_val,
       trace_quad_n = as.integer(trace_quad_n)
     )
 
@@ -141,7 +121,6 @@
   obj <- RTMB::MakeADFun(
     objective,
     par_list,
-    random = if (length(random_names)) random_names else NULL,
     silent = TRUE
   )
 
@@ -155,9 +134,6 @@
   # extract var estimates
   lambda_d2_hat    <- exp(as.numeric(fitted_par$log_lambda_d2))
   lambda_level_hat <- if (estimate_level) exp(as.numeric(fitted_par$log_lambda_level)) else 0
-  sigma_u2_hat <- if (has_random) exp(as.numeric(fitted_par$log_sigma_u2)) else 0
-  u_hat        <- if (has_random) as.numeric(fitted_par$u) else numeric(0L)
-  names(u_hat) <- colnames(prepared$Z)
 
   # Re-run at the optimum to recover sigma2, Cbeta, serial effect, etc.
   final <- .markussen_evaluate_k1(
@@ -165,12 +141,9 @@
     lambda_level = lambda_level_hat,
     y            = y_vec,
     X            = X_full,
-    Z            = Z_full,
     prepared     = prepared,
     left_row     = left_row,
     right_rows   = right_rows,
-    sigma_u2     = sigma_u2_hat,
-    u            = u_hat,
     trace_quad_n = as.integer(trace_quad_n)
   )
 
@@ -198,7 +171,7 @@
   boundary_coef_vcov <- if (length(boundary_cols)) fixed_vcov[boundary_cols, boundary_cols, drop = FALSE] else matrix(numeric(0L), 0L, 0L)
 
   # fitted-value decomposition
-  # fitted = fixed_effect + boundary_effect + random_effect + serial_effect
+  # fitted = fixed_effect + boundary_effect + serial_effect
   # All are recoverable from the Markussen evaluate output.
   fixed_effect    <- if (length(base_cols) > 0L) drop(prepared$base_X %*% beta_hat) else rep(0, n_obs)
   boundary_effect <- if (length(boundary_cols) > 0L) drop(prepared$boundary_value_design %*% gamma_hat) else rep(0, n_obs)
@@ -235,7 +208,6 @@
     Cbeta                          = Cbeta_mat,
     tau                            = final$sigma2 / lambda_d2_hat,
     sigma2                         = final$sigma2,
-    sigma_u2                       = sigma_u2_hat,
     lambda_d2                      = lambda_d2_hat,
     lambda_level                   = lambda_level_hat,
     trace_integral                 = as.numeric(final$trace_integral),
@@ -249,14 +221,6 @@
     boundary_effect                = boundary_effect,
     serial_effect                  = as.numeric(final$serial_effect),
     serial_derivative              = as.numeric(final$serial_derivative),
-    random_effect                  = as.numeric(final$random_effect),
-    u_hat                          = u_hat,
-    s_hat                          = numeric(0L),
-    serial_basis                   = matrix(numeric(0L), nrow = prepared$n_per_curve, ncol = 0L),
-    serial_penalty                 = list(
-      d2    = matrix(numeric(0L), 0L, 0L),
-      level = matrix(numeric(0L), 0L, 0L)
-    ),
     data                           = prepared,
     operator                       = operator,
     left_boundary                  = left_boundary,

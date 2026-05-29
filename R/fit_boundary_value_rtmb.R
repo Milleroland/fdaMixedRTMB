@@ -1,14 +1,13 @@
 if (getRversion() >= "2.15.1") {
   # Variables used inside RTMB objective closures (injected by RTMB::getAll).
   # The Markussen REML engine (engine = "markussen_reml") uses:
-  #   - from parms:     log_lambda_d2, log_lambda_level, log_sigma_u2, u
-  #   - from data_list: y_data, X_data, Z_data
+  #   - from parms:     log_lambda_d2, log_lambda_level
+  #   - from data_list: y_data, X_data
   # sigma2, beta, gamma, and the serial-coefficient block s are all profiled
   # analytically and are therefore NOT RTMB parameters.
   utils::globalVariables(c(
-    "log_lambda_d2", "log_lambda_level", "log_sigma_u2",
-    "u",
-    "y_data", "X_data", "Z_data"
+    "log_lambda_d2", "log_lambda_level",
+    "y_data", "X_data"
   ))
 }
 
@@ -62,14 +61,12 @@ if (getRversion() >= "2.15.1") {
   curve = NULL,
   data = NULL,
   X = NULL,
-  Z = NULL,
   boundary_X = NULL,
   operator = operator_k1(),
   left_boundary = c(1, 0),
   right_boundary = c(1, 0),
   tau_init = NULL,
   sigma2_init = NULL,
-  sigma_u2_init = NULL,
   lambda_level_init = NULL,
   trace_quad_n = 64L,
   control = list(),
@@ -81,7 +78,6 @@ if (getRversion() >= "2.15.1") {
   time_missing <- missing(time)
   curve_missing <- missing(curve)
   X_missing <- missing(X)
-  Z_missing <- missing(Z)
   boundary_X_missing <- missing(boundary_X)
   boundary_formula_missing <- missing(boundary_formula)
   tau_init_missing <- missing(tau_init)
@@ -90,7 +86,6 @@ if (getRversion() >= "2.15.1") {
   time_expr <- substitute(time)
   curve_expr <- substitute(curve)
   X_expr <- substitute(X)
-  Z_expr <- substitute(Z)
   boundary_X_expr <- substitute(boundary_X)
   boundary_formula_expr <- substitute(boundary_formula)
 
@@ -112,7 +107,6 @@ if (getRversion() >= "2.15.1") {
     time <- .resolve_fit_data_vector(time_expr, data = data, env = caller, what = "time")
     curve <- .resolve_fit_data_vector(curve_expr, data = data, env = caller, what = "curve")
     X <- if (X_missing) NULL else .resolve_fit_design_arg(X_expr, data = data, env = caller, what = "X")
-    Z <- if (Z_missing) NULL else .resolve_fit_design_arg(Z_expr, data = data, env = caller, what = "Z")
     boundary_X <- if (boundary_X_missing) {
       NULL
     } else {
@@ -160,7 +154,6 @@ if (getRversion() >= "2.15.1") {
     time = time,
     curve = curve,
     X = X,
-    Z = Z,
     boundary_X = boundary_X,
     intercept_default = FALSE
   )
@@ -177,10 +170,9 @@ if (getRversion() >= "2.15.1") {
 
   tau_init <- if (is.null(tau_init)) 0.5 * y_var else as.numeric(tau_init)
   sigma2_init <- if (is.null(sigma2_init)) 0.1 * y_var else as.numeric(sigma2_init)
-  sigma_u2_init <- if (is.null(sigma_u2_init)) 0.1 * y_var else as.numeric(sigma_u2_init)
 
-  if (tau_init <= 0 || sigma2_init <= 0 || sigma_u2_init < 0) {
-    stop("Initial variance values must be positive, with `sigma_u2_init >= 0`.")
+  if (tau_init <= 0 || sigma2_init <= 0) {
+    stop("Initial variance values must be positive.")
   }
 
   lambda_d2_init <- if (tau_init_missing && sigma2_init_missing) {
@@ -214,7 +206,6 @@ if (getRversion() >= "2.15.1") {
     right_boundary    = right_boundary,
     lambda_d2_init    = lambda_d2_init,
     sigma2_init       = sigma2_init,
-    sigma_u2_init     = sigma_u2_init,
     lambda_level_init = lambda_level_init,
     control           = control,
     trace_quad_n      = trace_quad_n,

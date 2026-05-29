@@ -2,9 +2,9 @@
 #'
 #' `fdaLm_rtmb()` is the main user-facing interface for \pkg{fdaMixedRTMB}.
 #' It mimics the `fdaLm()` interface from the original \pkg{fdaMixed} package
-#' and uses the \pkg{Formula} package to parse a two-part left-hand-side /
-#' two-part right-hand-side formula of the form
-#' \preformatted{ y | curve ~ fixed_part | random_part }
+#' and uses the \pkg{Formula} package to parse a two-part left-hand-side
+#' formula of the form
+#' \preformatted{ y | curve ~ fixed_part }
 #'
 #' Variables on either right-hand side are first looked up in `design`
 #' (a curve-level data frame, one row per curve) when available, and then in
@@ -43,7 +43,6 @@
 #'   times. Defaults to `"time"`.
 #' @param tau_init Initial serial-effect scale.
 #' @param sigma2_init Initial noise variance.
-#' @param sigma_u2_init Initial grouped random-effect variance.
 #' @param lambda_level_init Initial zeroth-order penalty for shifted
 #'   operators.
 #' @param trace_quad_n Number of fixed Gauss-Legendre quadrature nodes for the
@@ -64,7 +63,6 @@ fdaLm_rtmb <- function(
   time_variable = "time",
   tau_init = NULL,
   sigma2_init = NULL,
-  sigma_u2_init = NULL,
   lambda_level_init = NULL,
   trace_quad_n = 64L,
   control = list()
@@ -181,7 +179,6 @@ fdaLm_rtmb <- function(
   } else {
     NULL
   }
-  Z_mat <- if (rhs_n >= 2L) resolve_rhs(2L, drop_intercept = FALSE) else NULL
 
   ##  emmeans metadata 
   ## Store the fixed-effects terms, factor levels, contrasts, and source data
@@ -324,14 +321,12 @@ fdaLm_rtmb <- function(
     time = time,
     curve = curve,
     X = X_mat,
-    Z = Z_mat,
     boundary_X = boundary_X,
     operator = operator,
     left_boundary = left_boundary,
     right_boundary = right_boundary,
     tau_init = tau_init,
     sigma2_init = sigma2_init,
-    sigma_u2_init = sigma_u2_init,
     lambda_level_init = lambda_level_init,
     trace_quad_n = trace_quad_n,
     control = control

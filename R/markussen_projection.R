@@ -15,10 +15,8 @@
 #     projection sweeps
 #   - approximates the REML log-determinant via fixed Gauss-Legendre quadrature
 #     of the Markussen trace integral, matching the fdaMixed trace machinery
-#   - optionally marginalizes grouped random effects u via an RTMB Laplace
-#     approximation; no latent serial-coefficient block s is introduced
 #   - RTMB automatic differentiation drives nlminb() over the remaining
-#     variance parameters (lambda_d2, optionally lambda_level, sigma_u2)
+#     variance parameters (lambda_d2, optionally lambda_level)
 #
 # The helper functions are:
 #   .markussen_state_vector_k1   — builds the [1; eta] state vector
@@ -284,20 +282,15 @@
   lambda_level = 0,
   y,
   X,
-  Z,
   prepared,
   left_row,
   right_rows,
-  sigma_u2 = 0,
-  u = numeric(0),
   trace_quad_n = 64L
 ) {
   NN <- prepared$n_per_curve
   MM <- prepared$n_curves
   n_total <- length(y)
   p0 <- ncol(X)
-  q <- ncol(Z)
-  has_random <- q > 0L
   left <- min(prepared$time_grid)
   right <- max(prepared$time_grid)
   Delta <- (right - left) / NN
@@ -308,8 +301,7 @@
     quadratic_term = alpha_2k
   )
 
-  random_part <- if (has_random) drop(Z %*% u) else y * 0
-  y_adj <- y - random_part
+  y_adj <- y
 
   proj_list <- vector("list", MM)
   deriv_list <- vector("list", MM)
@@ -405,9 +397,6 @@
 
   nll <- (n_total - p0) * log(sigma2_hat) +
     trace_integral + log_det_reml + n_total - p0
-  if (has_random) {
-    nll <- nll + q * log(sigma_u2) + sum(u^2) / sigma_u2
-  }
 
   list(
     nll = nll,
@@ -416,11 +405,9 @@
     lambda_level = lambda_level,
     tau = sigma2_hat / lambda_d2,
     beta = beta_hat,
-    u_hat = if (has_random) u else numeric(0),
     serial_effect = x_hat[, 1],
     serial_derivative = x_hat[, 2],
-    random_effect = random_part,
-    fitted = mean_hat + random_part + x_hat[, 1],
+    fitted = mean_hat + x_hat[, 1],
     right_boundary_derivative = right_boundary_derivative,
     trace_integral = trace_integral,
     Cbeta = Cbeta,

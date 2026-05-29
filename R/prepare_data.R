@@ -154,7 +154,6 @@
   time,
   curve,
   X = NULL,
-  Z = NULL,
   boundary_X = NULL,
   intercept_default = TRUE
 ) {
@@ -201,7 +200,6 @@
   }
 
   X <- .coerce_design_matrix(X, n_rows = length(y), what = "X", intercept_default = intercept_default)
-  Z <- .coerce_design_matrix(Z, n_rows = length(y), what = "Z", intercept_default = FALSE)
   if (!is.null(boundary_X)) {
     boundary_X_check <- if (is.vector(boundary_X) && !is.list(boundary_X)) matrix(boundary_X, ncol = 1L) else as.matrix(boundary_X)
     if (nrow(boundary_X_check) == length(y)) {
@@ -211,7 +209,6 @@
   boundary_X <- .coerce_boundary_design(boundary_X, curve = curve, n_curves = nlevels(curve))
 
   X <- X[ord, , drop = FALSE]
-  Z <- Z[ord, , drop = FALSE]
 
   list(
     y = y,
@@ -224,7 +221,6 @@
     time_grid = as.numeric(time_grid),
     grid_spacing = diffs[1],
     X = X,
-    Z = Z,
     boundary_X = boundary_X,
     order = ord
   )
