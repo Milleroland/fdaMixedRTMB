@@ -16,7 +16,6 @@ fdaLm_rtmb(
   time_variable = "time",
   tau_init = NULL,
   sigma2_init = NULL,
-  sigma_u2_init = NULL,
   lambda_level_init = NULL,
   trace_quad_n = 64L,
   control = list()
@@ -39,8 +38,8 @@ covariates that vary between curves but are constant within them.}
 \item{left_boundary, right_boundary}{Boundary specifications as a numeric
 length-two vector \code{c(alpha0, alpha1)} or a one-row two-column matrix.}
 
-\item{operator}{An \code{operator_k1()} object, a fdaMixed-style
-\code{lambda} vector, or \code{"laplace"}/\code{"shifted_laplace"}.}
+\item{operator}{An \code{operator_k1()} object, a numeric
+\code{lambda_start} vector, or \code{"laplace"}/\code{"shifted_laplace"}.}
 
 \item{boundary_formula}{Optional one-sided formula for the curve-level
 boundary regression. Only used when \code{boundary_value = TRUE}.}
@@ -55,8 +54,6 @@ times. Defaults to \code{"time"}.}
 \item{tau_init}{Initial serial-effect scale.}
 
 \item{sigma2_init}{Initial noise variance.}
-
-\item{sigma_u2_init}{Initial grouped random-effect variance.}
 
 \item{lambda_level_init}{Initial zeroth-order penalty for shifted
 operators.}

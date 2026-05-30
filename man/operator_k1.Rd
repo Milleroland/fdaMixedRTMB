@@ -5,13 +5,15 @@
 \alias{operator_laplace}
 \title{Markussen k = 1 operator}
 \usage{
-operator_k1(lambda = 1)
+operator_k1(lambda_start = 1, lambda = NULL)
 
-operator_laplace(lambda = 1)
+operator_laplace(lambda_start = 1, lambda = NULL)
 }
 \arguments{
-\item{lambda}{Numeric vector of length one or two using the same convention
-as \code{fdaMixed::fdaLm(K.order = 1, lambda = ...)}.}
+\item{lambda_start}{Numeric starting-value vector of length one or two, using
+the same convention as \code{fdaMixed::fdaLm(K.order = 1, lambda = ...)}.}
+
+\item{lambda}{Compatibility alias for \code{lambda_start}.}
 }
 \value{
 An object of class \code{"operator_k1"}.
@@ -22,9 +24,9 @@ forms match the original package:
 }
 \details{
 \itemize{
-  \item \code{lambda} of length one gives the pure second-derivative operator.
-  \item \code{lambda} of length two gives
-    the same operator with a level penalty.
+  \item \code{lambda_start} of length one gives \code{L f = -lambda_d2 * f''}.
+  \item \code{lambda_start} of length two gives
+    \code{L f = -lambda_d2 * f'' + lambda_level * f}.
 }
 
 Positive coefficients are used as starting values. A zero level coefficient

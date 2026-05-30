@@ -5,9 +5,9 @@
 #' mirrors \code{fdaLm()} from \pkg{fdaMixed}. The package supports the
 #' `K.order = 1` operators from the original \pkg{fdaMixed} package:
 #' `L f = -lambda_d2 * f''` and
-#' `L f = -lambda_d2 * f'' + lambda_level * f`. The user supplies boundary
-#' operators as numeric length-two alpha vectors and formulas for the fixed,
-#' random, and boundary-value regressions.
+#' `L f = -lambda_d2 * f'' + lambda_level * f`. The user supplies operator
+#' starting values, boundary operators as numeric length-two alpha vectors, and
+#' formulas for the fixed, random, and boundary-value regressions.
 #'
 #' @keywords internal
 #' @importFrom stats coef predict

@@ -31,7 +31,7 @@
 #'   covariates that vary between curves but are constant within them.
 #' @param left_boundary,right_boundary Boundary specifications as a numeric
 #'   length-two vector `c(alpha0, alpha1)` or a one-row two-column matrix.
-#' @param operator An `operator_k1()` object, a fdaMixed-style `lambda` vector,
+#' @param operator An `operator_k1()` object, a numeric `lambda_start` vector,
 #'   or `"laplace"`/`"shifted_laplace"`.
 #' @param boundary_formula Optional one-sided formula for the curve-level
 #'   boundary regression. Only used when `boundary_value = TRUE`.

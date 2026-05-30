@@ -18,21 +18,33 @@ library(patchwork)
 library(emmeans)
 library(fdaMixedRTMB)
 
+beer_plot_text <- list(
+  base = 22,
+  title = 30,
+  subtitle = 22,
+  strip = 22,
+  axis_title = 24,
+  axis_text = 20,
+  legend = 22
+)
+
+beer_large_plot_theme <- theme(
+  legend.position = "top",
+  panel.grid.minor = element_blank(),
+  plot.title = element_text(face = "bold", size = beer_plot_text$title),
+  plot.subtitle = element_text(color = "grey35", size = beer_plot_text$subtitle),
+  strip.text = element_text(face = "bold", size = beer_plot_text$strip),
+  axis.title = element_text(color = "grey20", size = beer_plot_text$axis_title),
+  axis.text = element_text(size = beer_plot_text$axis_text),
+  legend.text = element_text(size = beer_plot_text$legend),
+  legend.title = element_text(size = beer_plot_text$legend)
+)
 
 theme_set(
-  theme_minimal(base_size = 20) +
-    theme(
-      legend.position = "top",
-      panel.grid.minor = element_blank(),
-      plot.title = element_text(face = "bold", size = 28),
-      plot.subtitle = element_text(color = "grey35", size = 20),
-      strip.text = element_text(face = "bold", size = 20),
-      axis.title = element_text(color = "grey20", size = 22),
-      axis.text = element_text(size = 18),
-      legend.text = element_text(size = 20),
-      legend.title = element_text(size = 20)
-    )
+  theme_minimal(base_size = beer_plot_text$base) +
+    beer_large_plot_theme
 )
+
 
 sex_cols <- c(
   F = "#D55E00",
@@ -326,14 +338,7 @@ p_monthly_gain <- ggplot(
     y = "Cumulative beers",
     colour = NULL
   ) +
-  theme(
-    plot.title = element_text(size = 28),
-    plot.subtitle = element_text(size = 20),
-    strip.text = element_text(size = 20),
-    axis.title = element_text(size = 22),
-    axis.text = element_text(size = 18),
-    legend.text = element_text(size = 20)
-  )
+  beer_large_plot_theme
 
 print(p_eda)
 print(p_monthly_gain)
@@ -528,7 +533,7 @@ sex_diagnostics <- make_sex_diagnostics(fit_sex_end_rate)
 
 print(fit_sex_end_rate)
 print(summary(fit_sex_end_rate))
-plot(fit_sex_end_rate, which = c("fit", "residual", "rho", "boundary"))
+plot_large_diagnostics(fit_sex_end_rate, which = c("fit", "residual", "rho", "boundary"))
 print(sex_diagnostics$boundary_results)
 print(sex_diagnostics$variance_results)
 print(sex_diagnostics$plots$rho)
@@ -659,12 +664,7 @@ make_month_diagnostics <- function(fit) {
       y = "Fitted cumulative beers",
       colour = NULL
     ) +
-    theme(
-      plot.title = element_text(size = 28),
-      axis.title = element_text(size = 22),
-      axis.text = element_text(size = 18),
-      legend.text = element_text(size = 20)
-    )
+    beer_large_plot_theme
 
   p_serial <- ggplot(
     serial_mean_df,
@@ -728,7 +728,7 @@ month_diagnostics <- make_month_diagnostics(fit_month_end_rate)
 
 print(fit_month_end_rate)
 print(summary(fit_month_end_rate))
-plot(fit_month_end_rate, which = c("fit", "residual", "rho", "boundary"))
+plot_large_diagnostics(fit_month_end_rate, which = c("fit", "residual", "rho", "boundary"))
 print(month_diagnostics$boundary_results)
 print(month_diagnostics$variance_results)
 print(month_diagnostics$plots$rho)
@@ -808,7 +808,15 @@ print(dim(model.matrix(fit_month_end_rate, component = "all")))
 print(terms(fit_month_end_rate))
 
 # Diagnostic plot method
-plot(fit_month_end_rate, which = c("fit", "residual", "qq", "serial", "rho", "boundary"))
+plot_large_diagnostics(fit_month_end_rate, which = c("fit", "residual", "qq", "serial", "rho", "boundary"))
+
+plot_large_diagnostics(fit_month_end_rate, which = c("fit", "residual", "rho"))
+png("diagnostoics.png")
+
+plot(fit_month_end_rate, which = "fit")
+plot(fit_month_end_rate, which = "residual")
+plot(fit_month_end_rate, which = "rho")
+
 
 # emmeans compatibility for the boundary-value regression
 emm_month_end_rate <- emmeans(

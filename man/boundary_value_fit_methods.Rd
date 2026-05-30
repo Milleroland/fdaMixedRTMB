@@ -16,8 +16,7 @@
 
 \method{predict}{boundary_value_fit}(
   object,
-  type = c("response", "fixed", "boundary", "serial", "random", "right_derivative",
-    "rho"),
+  type = c("response", "fixed", "boundary", "serial", "right_derivative", "rho"),
   ...
 )
 

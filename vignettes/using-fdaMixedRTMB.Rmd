@@ -1,0 +1,639 @@
+---
+title: "Using fdaMixedRTMB: boundary-value models, diagnostics, and marginal means"
+output: rmarkdown::html_vignette
+vignette: >
+  %\VignetteIndexEntry{Using fdaMixedRTMB: boundary-value models, diagnostics, and marginal means}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
+---
+
+```{r setup, include = FALSE}
+knitr::opts_chunk$set(
+  collapse = TRUE,
+  comment = "#>",
+  fig.width = 7,
+  fig.height = 5,
+  fig.align = "center"
+)
+```
+
+`fdaMixedRTMB` fits operator-based functional mixed models where each
+observed curve is represented on a common time grid. This vignette uses the
+packaged beer-tracker data to show the typical workflow:
+
+1. We turn event-level records into cumulative and weekly trajectory data.
+2. Fit a boundary-value model with `fdaLm_rtmb()`.
+3. Inspect the fitted object with package methods.
+4. Use diagnostic plots. 
+5. Use `emmeans` for the boundary-value regression.
+6. Extract fitted curves for plotting or downstream summaries.
+
+```{r libraries}
+library(fdaMixedRTMB)
+library(emmeans)
+library(ggplot2)
+
+old_theme <- theme_set(theme_minimal(base_size = 11))
+sex_cols <- c(F = "#D55E00", M = "#0072B2")
+```
+
+## Prepare Beer-Tracker Data
+
+The example data are event records: one row per logged beer. A functional
+response needs one row per subject and time point, so the first step is to
+aggregate to daily counts and fill missing subject-day combinations with zero.
+
+```{r read-data}
+beer_file <- system.file("examples", "dailybeers.csv", package = "fdaMixedRTMB")
+if (!nzchar(beer_file)) {
+  beer_file <- file.path("..", "inst", "examples", "dailybeers.csv")
+}
+
+beer_raw <- read.csv(beer_file, stringsAsFactors = FALSE)
+beer_raw$timestamp <- as.POSIXct(
+  beer_raw$tid,
+  format = "%d/%m/%Y %H.%M.%S",
+  tz = "UTC"
+)
+beer_raw$date <- as.Date(beer_raw$timestamp)
+beer_raw$beer <- as.numeric(gsub(",", ".", beer_raw$antal, fixed = TRUE))
+beer_raw$beer[is.na(beer_raw$beer)] <- 1
+
+sex_lookup <- data.frame(
+  navn = c(
+    "Mille", "Milla", "Augusta", "Lise", "Frigg",
+    "Baldur", "Julle", "Malthe", "Nikolai", "William"
+  ),
+  sex = c(rep("F", 5), rep("M", 5)),
+  stringsAsFactors = FALSE
+)
+
+beer_raw <- merge(
+  beer_raw[c("navn", "date", "beer")],
+  sex_lookup,
+  by = "navn",
+  all.x = TRUE,
+  sort = FALSE
+)
+
+range(beer_raw$date)
+table(beer_raw$navn)
+```
+
+The names are anonymized before modeling. `design` data frames in
+`fdaMixedRTMB` are curve-level data frames: they contain one row per curve and
+the covariates that are constant for that curve. The raw log has no beer
+entries after May 26, but the observation window runs through May 28, so the
+daily grid below explicitly includes May 27 and May 28 as zero-count days.
+
+```{r daily-grid}
+last_beer_date <- max(beer_raw$date, na.rm = TRUE)
+analysis_year <- as.integer(format(last_beer_date, "%Y"))
+analysis_start <- as.Date(sprintf("%d-01-01", analysis_year))
+analysis_end <- max(last_beer_date, as.Date(paste0(format(last_beer_date, "%Y-%m"), "-28")))
+
+months_ordered <- month.name[seq_len(as.integer(format(analysis_end, "%m")))]
+n_days_month <- min(28L, as.integer(format(analysis_end, "%d")))
+
+c(
+  last_logged_beer = as.character(last_beer_date),
+  analysis_end = as.character(analysis_end)
+)
+
+date_grid <- data.frame(date = seq(analysis_start, analysis_end, by = "day"))
+date_grid$day <- seq_len(nrow(date_grid))
+date_grid$month_num <- as.integer(format(date_grid$date, "%m"))
+date_grid$month_name <- factor(month.name[date_grid$month_num], levels = month.name)
+date_grid$day_within_month <- as.integer(format(date_grid$date, "%d"))
+
+subject_lookup <- unique(beer_raw[c("navn", "sex")])
+subject_lookup <- subject_lookup[order(subject_lookup$navn), ]
+subject_lookup$subject <- seq_len(nrow(subject_lookup))
+subject_lookup$name <- paste("Friend", subject_lookup$subject)
+subject_lookup$name <- factor(subject_lookup$name, levels = subject_lookup$name)
+subject_lookup$sex <- factor(subject_lookup$sex, levels = c("F", "M"))
+
+daily_totals <- aggregate(beer ~ navn + sex + date, beer_raw, sum)
+
+beer_daily <- merge(subject_lookup, date_grid, by = NULL)
+beer_daily <- merge(
+  beer_daily,
+  daily_totals,
+  by = c("navn", "sex", "date"),
+  all.x = TRUE,
+  sort = FALSE
+)
+beer_daily$beer[is.na(beer_daily$beer)] <- 0
+beer_daily <- beer_daily[order(beer_daily$subject, beer_daily$day), ]
+beer_daily$beer_gain <- ave(beer_daily$beer, beer_daily$subject, FUN = cumsum)
+
+head(beer_daily[c("name", "sex", "date", "day", "beer", "beer_gain")])
+aggregate(beer ~ date, subset(beer_daily, date >= analysis_end - 1L), sum)
+```
+
+### Full-Period Curves
+
+Full-period curves accumulate beer gains from the first analysis day through
+the last available day. The right endpoint of such a curve is the subject's
+total beer gain over the full tracker period.
+
+```{r full-period-curves}
+full_period_df <- transform(
+  beer_daily,
+  time = day,
+  y = beer_gain,
+  curve = name
+)
+
+full_curve_meta <- unique(full_period_df[c("curve", "subject", "name", "sex")])
+full_curve_meta <- full_curve_meta[order(full_curve_meta$subject), ]
+
+ggplot(full_period_df, aes(time, y, colour = sex)) +
+  geom_line(aes(group = name), alpha = 0.3, linewidth = 0.4) +
+  stat_summary(aes(group = sex), fun = mean, geom = "line", linewidth = 1.1) +
+  scale_colour_manual(values = sex_cols) +
+  labs(
+    title = "Full-period cumulative beer-gain curves",
+    x = "Day of tracker period",
+    y = "Cumulative beers",
+    colour = NULL
+  )
+```
+
+A full-period model uses the same interface. For example, the endpoint
+boundary derivative could be modeled by sex:
+
+```{r full-period-fit-example, eval = FALSE}
+fit_full <- fdaLm_rtmb(
+  y | curve ~ 0,
+  data = full_period_df,
+  design = full_curve_meta,
+  boundary_formula = ~ sex,
+  boundary_value = TRUE,
+  operator = operator_laplace(),
+  right_boundary = right_boundary_operator_k1(alpha = c(0, 1)),
+  time_variable = "time"
+)
+```
+
+### Monthly Curves
+
+Monthly curves reset the cumulative sum at the beginning of each month. To put
+all months on the same time grid, this vignette uses the common number of
+available days, capped at 28.
+
+```{r monthly-curves}
+beer_monthly_df <- subset(
+  beer_daily,
+  month_name %in% months_ordered & day_within_month <= n_days_month
+)
+beer_monthly_df <- beer_monthly_df[
+  order(
+    beer_monthly_df$subject,
+    beer_monthly_df$month_num,
+    beer_monthly_df$day_within_month
+  ),
+]
+beer_monthly_df$monthly_cumsum <- ave(
+  beer_monthly_df$beer,
+  beer_monthly_df$subject,
+  beer_monthly_df$month_num,
+  FUN = cumsum
+)
+beer_monthly_df$month_name <- factor(
+  as.character(beer_monthly_df$month_name),
+  levels = months_ordered
+)
+beer_monthly_df$curve <- paste(beer_monthly_df$name, beer_monthly_df$month_name, sep = ": ")
+
+curve_meta <- unique(
+  beer_monthly_df[c("curve", "subject", "name", "sex", "month_name", "month_num")]
+)
+curve_meta <- curve_meta[order(curve_meta$subject, curve_meta$month_num), ]
+curve_meta$curve <- factor(curve_meta$curve, levels = curve_meta$curve)
+curve_meta$name <- factor(curve_meta$name, levels = levels(subject_lookup$name))
+curve_meta$sex <- factor(curve_meta$sex, levels = c("F", "M"))
+curve_meta$month_name <- factor(curve_meta$month_name, levels = months_ordered)
+beer_monthly_df$curve <- factor(beer_monthly_df$curve, levels = levels(curve_meta$curve))
+
+head(
+  beer_monthly_df[
+    c("name", "month_name", "day_within_month", "beer", "monthly_cumsum", "curve")
+  ]
+)
+```
+
+```{r monthly-plot}
+monthly_means <- aggregate(
+  monthly_cumsum ~ month_name + day_within_month,
+  beer_monthly_df,
+  mean
+)
+month_cols <- setNames(
+  grDevices::hcl.colors(length(months_ordered), "Dark 3"),
+  months_ordered
+)
+
+ggplot(monthly_means, aes(day_within_month, monthly_cumsum, colour = month_name)) +
+  geom_line(linewidth = 1) +
+  scale_colour_manual(values = month_cols) +
+  labs(
+    title = "Average monthly beer-gain curves",
+    x = "Day within month",
+    y = "Cumulative beers",
+    colour = NULL
+  )
+```
+
+## Fit a Boundary-Value Model
+
+The model below uses monthly cumulative beer gains as the response. For a
+faster and more readable vignette, the fit uses four anonymized participants;
+the data-preparation code above created the full set of monthly curves.
+
+```{r model-data}
+model_subjects <- levels(subject_lookup$name)[1:4]
+
+curve_meta_model <- subset(curve_meta, name %in% model_subjects)
+curve_meta_model$curve <- factor(
+  as.character(curve_meta_model$curve),
+  levels = as.character(curve_meta_model$curve)
+)
+
+beer_monthly_model <- subset(beer_monthly_df, name %in% model_subjects)
+beer_monthly_model$curve <- factor(
+  as.character(beer_monthly_model$curve),
+  levels = levels(curve_meta_model$curve)
+)
+
+c(
+  observations = nrow(beer_monthly_model),
+  curves = nlevels(beer_monthly_model$curve),
+  days_per_curve = n_days_month
+)
+```
+
+```{r fit-model}
+fit <- fdaLm_rtmb(
+  monthly_cumsum | curve ~ 0,
+  data = beer_monthly_model,
+  design = curve_meta_model,
+  boundary_formula = ~ month_name,
+  boundary_value = TRUE,
+  operator = operator_laplace(),
+  right_boundary = right_boundary_operator_k1(alpha = c(0, 1)),
+  time_variable = "day_within_month"
+)
+```
+
+The main arguments are:
+
+- `monthly_cumsum | curve ~ 0`: the response is `monthly_cumsum`, and `curve`
+  identifies the functional curve. The fixed-effect part is `0` because this
+  example puts the month effect in the boundary-value regression.
+- `boundary_value = TRUE`: estimate a nonzero right-boundary value.
+- `boundary_formula = ~ month_name`: model the curve-level boundary value as a
+  function of month.
+- `right_boundary = right_boundary_operator_k1(alpha = c(0, 1))`: define the
+  right boundary operator as endpoint derivative, so the fitted `rho` is the
+  month-end derivative. 
+- `operator = operator_laplace()`: use the K.order = 1 pure Laplace operator
+  `L f = -lambda_d2 f''`. The shifted operator is available via
+  `operator_k1(lambda_start = c(1, 1))`.
+
+## Inspect the Fitted Model
+
+The fitted object has ordinary R methods for printing, summarizing,
+coefficients, predictions, residuals, log likelihoods, and model dimensions.
+
+```{r print-summary}
+fit
+summary(fit)
+```
+
+```{r coefficients}
+coef(fit, component = "boundary")
+coef(fit, component = "rho")
+coef(fit, component = "variance")
+```
+
+`component = "boundary"` gives the coefficients of the boundary-value
+regression. `component = "rho"` returns the fitted curve-specific boundary
+values.
+
+## Plot Diagnostics
+
+The S3 diagnostic method is available as
+`plot(fit, which = c("fit", "residual", "rho"))`. The vignette below builds
+the same common diagnostics with `ggplot2` so the plot style is consistent:
+
+- `"fit"`: observed values against fitted values,
+- `"residual"`: residuals against fitted values, and
+- `"rho"`: estimated curve-specific right-boundary values.
+
+```{r diagnostics}
+diagnostic_df <- data.frame(
+  observed = fit$data$y,
+  fitted = as.numeric(predict(fit, type = "response")),
+  residual = as.numeric(residuals(fit))
+)
+
+rho_df <- data.frame(
+  curve = names(coef(fit, component = "rho")),
+  rho = as.numeric(coef(fit, component = "rho"))
+)
+rho_df$curve <- factor(rho_df$curve, levels = rho_df$curve)
+
+ggplot(diagnostic_df, aes(fitted, observed)) +
+  geom_point(alpha = 0.65, size = 1.2) +
+  geom_abline(slope = 1, intercept = 0, colour = "grey40") +
+  labs(
+    title = "Observed vs fitted",
+    x = "Fitted value",
+    y = "Observed value"
+  )
+
+ggplot(diagnostic_df, aes(fitted, residual)) +
+  geom_hline(yintercept = 0, colour = "grey40") +
+  geom_point(alpha = 0.65, size = 1.2) +
+  labs(
+    title = "Residuals vs fitted",
+    x = "Fitted value",
+    y = "Residual"
+  )
+
+ggplot(rho_df, aes(curve, rho)) +
+  geom_col(fill = "grey45") +
+  coord_flip() +
+  labs(
+    title = "Estimated boundary values",
+    x = "Curve",
+    y = "Estimated rho"
+  )
+```
+
+The `"boundary"` panel is also useful: it checks the right boundary operator on
+the homogeneous serial effect. For a well-behaved boundary-value decomposition,
+this quantity should be close to zero relative to the scale of `rho`.
+
+```{r boundary-check}
+boundary_check_df <- data.frame(
+  curve = names(fit$right_boundary_serial_operator),
+  right_operator = as.numeric(fit$right_boundary_serial_operator)
+)
+boundary_check_df$curve <- factor(
+  boundary_check_df$curve,
+  levels = boundary_check_df$curve
+)
+
+ggplot(boundary_check_df, aes(curve, right_operator)) +
+  geom_hline(yintercept = 0, colour = "grey40") +
+  geom_point(size = 1.6) +
+  coord_flip() +
+  labs(
+    title = "Homogeneous boundary check",
+    x = "Curve",
+    y = "Right operator on serial effect"
+  )
+```
+
+## Use emmeans
+
+`fdaMixedRTMB` provides `emmeans` support for both ordinary fixed effects and
+the boundary-value regression. Here we ask for marginal means of `month_name`
+in `mode = "boundary"`, which targets the fitted `rho ~ month_name` model.
+
+```{r emmeans}
+emm_month <- emmeans(fit, ~ month_name, mode = "boundary")
+emm_month
+pairs(emm_month)
+```
+
+Because the right boundary is `alpha = c(0, 1)` these marginal means are estimated
+endpoint derivative. If the right boundary were `alpha = c(1,0)` the same 
+`emmeans()`call would summarize the month-end cumulative beer gains instead. 
+
+## Extract Fitted Curves
+
+Use `predict()` and `residuals()` to recover fitted values and model
+components on the original curve grid. The returned vectors follow the internal
+curve-time ordering, so the data are sorted by `curve` and time before adding
+them.
+
+```{r extract-fitted}
+fitted_curves <- beer_monthly_model[
+  order(beer_monthly_model$curve, beer_monthly_model$day_within_month),
+]
+fitted_curves$fitted <- as.numeric(predict(fit, type = "response"))
+fitted_curves$boundary_effect <- as.numeric(predict(fit, type = "boundary"))
+fitted_curves$serial_effect <- as.numeric(predict(fit, type = "serial"))
+fitted_curves$residual <- as.numeric(residuals(fit))
+
+head(
+  fitted_curves[
+    c(
+      "name", "month_name", "day_within_month", "monthly_cumsum",
+      "fitted", "boundary_effect", "serial_effect", "residual"
+    )
+  ]
+)
+```
+
+```{r fitted-plot}
+fitted_month_means <- aggregate(
+  fitted ~ month_name + day_within_month,
+  fitted_curves,
+  mean
+)
+
+ggplot(fitted_month_means, aes(day_within_month, fitted, colour = month_name)) +
+  geom_line(linewidth = 1) +
+  scale_colour_manual(values = month_cols) +
+  labs(
+    title = "Fitted monthly beer-gain curves",
+    x = "Day within month",
+    y = "Fitted cumulative beers",
+    colour = NULL
+  )
+```
+
+## Weekly Trajectories Without Cumulative Sums
+
+The cumulative curves are useful when the scientific question is about total
+gain by the end of a period. A different question is whether the weekly
+numbers themselves change over time. In that case each curve is one person's
+tracker-week beer totals, the time grid is week number, and the response is
+`weekly_beers` rather than an accumulated total. Weeks are consecutive 7-day
+blocks anchored at January 1. The observation window ends on May 28, which
+creates one trailing zero-only day; that day is folded into the final tracker
+week so the last plotted point is the May 21-28 week rather than an artificial
+zero-only week.
+
+For non-cumulative weekly counts, the endpoint value is just the beer count in
+the final modeled week. The endpoint derivative is more useful: it estimates
+the local trend at the end of the observed period, in weekly beers per week.
+This example therefore uses `right_boundary = c(0, 1)` and a boundary
+regression `rho ~ sex`.
+
+```{r weekly-curves}
+beer_weekly_daily <- beer_daily
+raw_week_num <- ((beer_weekly_daily$day - 1L) %/% 7L) + 1L
+
+last_raw_week <- max(raw_week_num)
+last_raw_week_total <- sum(beer_weekly_daily$beer[raw_week_num == last_raw_week])
+if (last_raw_week_total == 0 && last_raw_week > 1L) {
+  raw_week_num[raw_week_num == last_raw_week] <- last_raw_week - 1L
+}
+
+beer_weekly_daily$week_num <- raw_week_num
+n_weeks <- max(beer_weekly_daily$week_num)
+
+beer_weekly_df <- aggregate(
+  beer ~ subject + name + sex + week_num,
+  beer_weekly_daily,
+  sum
+)
+names(beer_weekly_df)[names(beer_weekly_df) == "beer"] <- "weekly_beers"
+beer_weekly_df <- beer_weekly_df[order(beer_weekly_df$subject, beer_weekly_df$week_num), ]
+beer_weekly_df$week_index <- beer_weekly_df$week_num - 1L
+beer_weekly_df$week_label <- factor(
+  paste("Week", beer_weekly_df$week_index),
+  levels = paste("Week", seq_len(n_weeks) - 1L)
+)
+beer_weekly_df$curve <- beer_weekly_df$name
+
+weekly_curve_meta <- unique(
+  beer_weekly_df[c("curve", "subject", "name", "sex")]
+)
+weekly_curve_meta <- weekly_curve_meta[order(weekly_curve_meta$subject), ]
+weekly_curve_meta$curve <- factor(weekly_curve_meta$curve, levels = weekly_curve_meta$curve)
+weekly_curve_meta$name <- factor(weekly_curve_meta$name, levels = levels(subject_lookup$name))
+weekly_curve_meta$sex <- factor(weekly_curve_meta$sex, levels = c("F", "M"))
+beer_weekly_df$curve <- factor(
+  beer_weekly_df$curve,
+  levels = levels(weekly_curve_meta$curve)
+)
+
+head(
+  beer_weekly_df[
+    c("name", "sex", "week_index", "week_label", "weekly_beers", "curve")
+  ]
+)
+```
+
+```{r weekly-plot}
+ggplot(beer_weekly_df, aes(week_index, weekly_beers, colour = sex)) +
+  geom_line(aes(group = name), alpha = 0.25, linewidth = 0.4) +
+  geom_point(aes(group = name), alpha = 0.35, size = 0.8) +
+  stat_summary(aes(group = sex), fun = mean, geom = "line", linewidth = 1.25) +
+  scale_colour_manual(values = sex_cols) +
+  scale_x_continuous(breaks = seq(0, n_weeks - 1L, by = 5)) +
+  labs(
+    title = "Weekly beers",
+    x = "Week number",
+    y = "Weekly beers",
+    colour = NULL
+  )
+```
+
+```{r weekly-fit}
+fit_weekly <- fdaLm_rtmb(
+  weekly_beers | curve ~ 0,
+  data = beer_weekly_df,
+  design = weekly_curve_meta,
+  boundary_formula = ~ sex,
+  boundary_value = TRUE,
+  operator = operator_laplace(),
+  right_boundary = right_boundary_operator_k1(alpha = c(0, 1)),
+  time_variable = "week_index"
+)
+
+c(
+  observations = nrow(beer_weekly_df),
+  curves = nlevels(beer_weekly_df$curve),
+  weeks_per_curve = length(unique(beer_weekly_df$week_num)),
+  converged = fit_weekly$converged
+)
+```
+
+The boundary coefficients and marginal means now describe sex differences in
+the right-end derivative of the weekly-number trajectory. Because the right
+boundary is `alpha = c(0, 1)`, `rho` is the fitted endpoint slope rather than
+the fitted number of beers in the final week.
+
+```{r weekly-emmeans}
+coef(fit_weekly, component = "boundary")
+coef(fit_weekly, component = "rho")
+coef(fit_weekly, component = "variance")
+
+emm_weekly_slope <- emmeans(fit_weekly, ~ sex, mode = "boundary")
+emm_weekly_slope
+pairs(emm_weekly_slope)
+```
+
+```{r weekly-slope-plot}
+weekly_slope_df <- as.data.frame(emm_weekly_slope)
+
+ggplot(weekly_slope_df, aes(sex, emmean, colour = sex)) +
+  geom_hline(yintercept = 0, colour = "grey45") +
+  geom_errorbar(aes(ymin = lower.CL, ymax = upper.CL), width = 0.12) +
+  geom_point(size = 2.2) +
+  scale_colour_manual(values = sex_cols, guide = "none") +
+  labs(
+    title = "Estimated endpoint derivative of weekly beers",
+    x = NULL,
+    y = "Endpoint slope, weekly beers per week"
+  )
+```
+
+The Gaussian model can produce fitted values below zero for sparse count data,
+so this fit should be read as a functional-trajectory demonstration rather than
+as a full count model.
+
+```{r weekly-fitted}
+weekly_fitted_curves <- beer_weekly_df[
+  order(beer_weekly_df$curve, beer_weekly_df$week_index),
+]
+weekly_fitted_curves$fitted <- as.numeric(predict(fit_weekly, type = "response"))
+weekly_fitted_curves$residual <- as.numeric(residuals(fit_weekly))
+
+weekly_mean_observed <- aggregate(
+  weekly_beers ~ sex + week_index,
+  weekly_fitted_curves,
+  mean
+)
+names(weekly_mean_observed)[names(weekly_mean_observed) == "weekly_beers"] <- "value"
+weekly_mean_observed$type <- "Observed mean"
+
+weekly_mean_fitted <- aggregate(
+  fitted ~ sex + week_index,
+  weekly_fitted_curves,
+  mean
+)
+names(weekly_mean_fitted)[names(weekly_mean_fitted) == "fitted"] <- "value"
+weekly_mean_fitted$type <- "Fitted mean"
+
+weekly_mean_plot <- rbind(weekly_mean_observed, weekly_mean_fitted)
+
+ggplot(weekly_mean_plot, aes(week_index, value, colour = sex, linetype = type)) +
+  geom_line(linewidth = 1) +
+  scale_colour_manual(values = sex_cols) +
+  scale_x_continuous(breaks = seq(0, n_weeks - 1L, by = 5)) +
+  labs(
+    title = "Fitted weekly beer trajectories",
+    x = "Week number",
+    y = "Weekly beers",
+    colour = NULL,
+    linetype = NULL
+  )
+```
+
+
+
+## Known Limitations
+
+At the time of writing, user-specified grouped random effects are not part of
+the public modeling workflow. The practical supported pattern is to use the
+formula interface for ordinary fixed effects and to use `boundary_formula` for
+curve-level boundary-value regressions. The serial functional effect is handled
+internally through the operator-projection machinery.

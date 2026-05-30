@@ -646,6 +646,7 @@ plot.boundary_value_fit <- function(x, which = "all", ask = FALSE, ...) {
 
   old_par <- graphics::par(no.readonly = TRUE)
   on.exit(graphics::par(old_par), add = TRUE)
+  graphics::par(cex.axis = 1.15, cex.lab = 1.2, cex.main = 1.25)
 
   if (isTRUE(ask)) {
     graphics::par(ask = TRUE)

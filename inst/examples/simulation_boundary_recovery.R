@@ -49,7 +49,7 @@ example_fit <- fdaLm_rtmb(
   boundary_formula = ~ boundary_x,
   left_boundary    = left_bc,
   right_boundary   = right_bc,
-  operator         = operator_k1(lambda = 1),
+  operator         = operator_k1(lambda_start = 1),
   time_variable    = "time"
 )
 summary(example_fit)
@@ -71,7 +71,7 @@ run_scenario <- function(n_curves, n_time, sigma, n_sim = 200L, base_seed = 1000
         boundary_formula = ~ boundary_x,
         left_boundary    = left_bc,
         right_boundary   = right_bc,
-        operator         = operator_k1(lambda = 1),
+        operator         = operator_k1(lambda_start = 1),
         time_variable    = "time",
         control          = list(eval.max = 500L, iter.max = 300L)
       ),
@@ -342,4 +342,3 @@ round(summary_table[, c("label", "n_curves", "n_time", "sigma", "n_conv",
                          "bias_g1", "rmse_g1", "cov_g1",
                          "bias_sig2", "rmse_sig2")],
       digits = 3L)
-

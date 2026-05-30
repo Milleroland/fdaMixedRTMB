@@ -4,22 +4,29 @@
 #' forms match the original package:
 #'
 #' \itemize{
-#'   \item `lambda` of length one gives `L f = -lambda[1] * f''`.
-#'   \item `lambda` of length two gives
-#'     `L f = -lambda[1] * f'' + lambda[2] * f`.
+#'   \item `lambda_start` of length one gives `L f = -lambda_d2 * f''`.
+#'   \item `lambda_start` of length two gives
+#'     `L f = -lambda_d2 * f'' + lambda_level * f`.
 #' }
 #'
 #' Positive coefficients are used as starting values. A zero level coefficient
 #' fixes the level term at zero; a positive level coefficient lets RTMB estimate
 #' it from the data.
 #'
-#' @param lambda Numeric vector of length one or two using the same convention
-#'   as `fdaMixed::fdaLm(K.order = 1, lambda = ...)`.
+#' @param lambda_start Numeric starting-value vector of length one or two, using
+#'   the same convention as `fdaMixed::fdaLm(K.order = 1, lambda = ...)`.
+#' @param lambda Compatibility alias for `lambda_start`.
 #' @return An object of class `"operator_k1"`.
 #' @export
-operator_k1 <- function(lambda = 1) {
-  lambda <- .normalize_operator_lambda_k1(lambda)
-  estimate_level <- lambda[["level"]] > 0
+operator_k1 <- function(lambda_start = 1, lambda = NULL) {
+  if (!missing(lambda)) {
+    if (!missing(lambda_start)) {
+      stop("Supply only one of `lambda_start` and `lambda`.")
+    }
+    lambda_start <- lambda
+  }
+  lambda_start <- .normalize_operator_lambda_start_k1(lambda_start)
+  estimate_level <- lambda_start[["level"]] > 0
   operator_label <- if (estimate_level) {
     "L f = -lambda_d2 * f'' + lambda_level * f"
   } else {
@@ -29,7 +36,7 @@ operator_k1 <- function(lambda = 1) {
   structure(
     list(
       K.order = 1L,
-      lambda_start = lambda,
+      lambda_start = lambda_start,
       estimate_level = estimate_level,
       operator_label = operator_label
     ),
@@ -39,26 +46,37 @@ operator_k1 <- function(lambda = 1) {
 
 #' @rdname operator_k1
 #' @export
-operator_laplace <- function(lambda = 1) {
-  operator_k1(lambda = lambda)
+operator_laplace <- function(lambda_start = 1, lambda = NULL) {
+  if (!missing(lambda)) {
+    if (!missing(lambda_start)) {
+      stop("Supply only one of `lambda_start` and `lambda`.")
+    }
+    return(operator_k1(lambda_start = lambda))
+  }
+  operator_k1(lambda_start = lambda_start)
 }
 
-.normalize_operator_lambda_k1 <- function(lambda) {
-  if (is.null(lambda)) {
-    lambda <- 1
+.normalize_operator_lambda_start_k1 <- function(lambda_start) {
+  if (is.null(lambda_start)) {
+    lambda_start <- 1
   }
-  lambda <- as.numeric(lambda)
-  if (length(lambda) < 1L || length(lambda) > 2L || any(!is.finite(lambda))) {
-    stop("`lambda` must be a finite numeric vector of length one or two.")
+  lambda_start <- as.numeric(lambda_start)
+  if (length(lambda_start) < 1L ||
+      length(lambda_start) > 2L ||
+      any(!is.finite(lambda_start))) {
+    stop("`lambda_start` must be a finite numeric vector of length one or two.")
   }
-  if (any(lambda < 0) || lambda[[1L]] <= 0) {
-    stop("`lambda[1]` must be positive and all lambda values must be non-negative.")
+  if (any(lambda_start < 0) || lambda_start[[1L]] <= 0) {
+    stop(
+      "`lambda_start[1]` must be positive and all lambda_start values ",
+      "must be non-negative."
+    )
   }
-  if (length(lambda) == 1L) {
-    lambda <- c(lambda, 0)
+  if (length(lambda_start) == 1L) {
+    lambda_start <- c(lambda_start, 0)
   }
-  names(lambda) <- c("d2", "level")
-  lambda
+  names(lambda_start) <- c("d2", "level")
+  lambda_start
 }
 
 .coerce_operator_k1 <- function(operator) {
@@ -66,21 +84,21 @@ operator_laplace <- function(lambda = 1) {
     return(operator)
   }
   if (is.numeric(operator)) {
-    return(operator_k1(lambda = operator))
+    return(operator_k1(lambda_start = operator))
   }
   if (is.character(operator) && length(operator) == 1L) {
     key <- tolower(operator)
     if (key %in% c("laplace", "pure", "pure_laplace", "d2")) {
-      return(operator_k1(lambda = 1))
+      return(operator_k1(lambda_start = 1))
     }
     if (key %in% c("shifted", "shifted_laplace", "fdaMixed_shifted")) {
-      return(operator_k1(lambda = c(1, 1)))
+      return(operator_k1(lambda_start = c(1, 1)))
     }
   }
 
   stop(
     "`operator` must be created by `operator_k1()`/`operator_laplace()`, ",
-    "be a fdaMixed-style lambda vector, or be one of 'laplace' or ",
+    "be a lambda_start vector, or be one of 'laplace' or ",
     "'shifted_laplace'."
   )
 }

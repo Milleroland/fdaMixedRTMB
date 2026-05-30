@@ -12,9 +12,13 @@ remotes::install_github("Milleroland/fdaMixedRTMB")
 `fdaMixedRTMB` is an R package for operator-based functional mixed models fit
 with RTMB. It focuses on the `K.order = 1` operators from `fdaMixed`:
 
-- `operator_k1(lambda = 1)` for `L f = -lambda_d2 * f''`
-- `operator_k1(lambda = c(1, 1))` for
+- `operator_k1(lambda_start = 1)` for `L f = -lambda_d2 * f''`
+- `operator_k1(lambda_start = c(1, 1))` for
   `L f = -lambda_d2 * f'' + lambda_level * f`
+
+The supplied `lambda_start` values initialize the REML optimization; the fitted
+object prints the estimated `lambda_d2` and, for shifted operators,
+`lambda_level`.
 
 Boundary operators are supplied as a numeric length-two vector `c(alpha0, alpha1)`,
 where `alpha0` multiplies the function value and `alpha1` multiplies the
