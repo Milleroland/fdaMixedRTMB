@@ -24,16 +24,18 @@ packaged beer-tracker data to show the typical workflow:
 1. We turn event-level records into cumulative and weekly trajectory data.
 2. Fit a boundary-value model with `fdaLm_rtmb()`.
 3. Inspect the fitted object with package methods.
-4. Use diagnostic plots. 
+4. Use diagnostic plots.
 5. Use `emmeans` for the boundary-value regression.
 6. Extract fitted curves for plotting or downstream summaries.
 
 ```{r libraries}
 library(fdaMixedRTMB)
 library(emmeans)
-library(ggplot2)
+library(tidyverse)
+library(lubridate)
 
 old_theme <- theme_set(theme_minimal(base_size = 11))
+
 sex_cols <- c(F = "#D55E00", M = "#0072B2")
 ```
 
@@ -45,39 +47,38 @@ aggregate to daily counts and fill missing subject-day combinations with zero.
 
 ```{r read-data}
 beer_file <- system.file("examples", "dailybeers.csv", package = "fdaMixedRTMB")
+
 if (!nzchar(beer_file)) {
   beer_file <- file.path("..", "inst", "examples", "dailybeers.csv")
 }
 
-beer_raw <- read.csv(beer_file, stringsAsFactors = FALSE)
-beer_raw$timestamp <- as.POSIXct(
-  beer_raw$tid,
-  format = "%d/%m/%Y %H.%M.%S",
-  tz = "UTC"
-)
-beer_raw$date <- as.Date(beer_raw$timestamp)
-beer_raw$beer <- as.numeric(gsub(",", ".", beer_raw$antal, fixed = TRUE))
-beer_raw$beer[is.na(beer_raw$beer)] <- 1
-
-sex_lookup <- data.frame(
+sex_lookup <- tibble(
   navn = c(
     "Mille", "Milla", "Augusta", "Lise", "Frigg",
     "Baldur", "Julle", "Malthe", "Nikolai", "William"
   ),
-  sex = c(rep("F", 5), rep("M", 5)),
-  stringsAsFactors = FALSE
+  sex = c(rep("F", 5), rep("M", 5))
 )
 
-beer_raw <- merge(
-  beer_raw[c("navn", "date", "beer")],
-  sex_lookup,
-  by = "navn",
-  all.x = TRUE,
-  sort = FALSE
-)
+beer_raw <- read_csv(beer_file, show_col_types = FALSE) |>
+  mutate(
+    timestamp = as.POSIXct(
+      tid,
+      format = "%d/%m/%Y %H.%M.%S",
+      tz = "UTC"
+    ),
+    date = as_date(timestamp),
+    beer = str_replace(as.character(antal), ",", "."),
+    beer = as.numeric(beer),
+    beer = replace_na(beer, 1)
+  ) |>
+  select(navn, date, beer) |>
+  left_join(sex_lookup, by = "navn")
 
 range(beer_raw$date)
-table(beer_raw$navn)
+
+beer_raw |>
+  count(navn)
 ```
 
 The names are anonymized before modeling. `design` data frames in
@@ -88,47 +89,62 @@ daily grid below explicitly includes May 27 and May 28 as zero-count days.
 
 ```{r daily-grid}
 last_beer_date <- max(beer_raw$date, na.rm = TRUE)
-analysis_year <- as.integer(format(last_beer_date, "%Y"))
-analysis_start <- as.Date(sprintf("%d-01-01", analysis_year))
-analysis_end <- max(last_beer_date, as.Date(paste0(format(last_beer_date, "%Y-%m"), "-28")))
+analysis_year <- year(last_beer_date)
 
-months_ordered <- month.name[seq_len(as.integer(format(analysis_end, "%m")))]
-n_days_month <- min(28L, as.integer(format(analysis_end, "%d")))
+analysis_start <- ymd(paste0(analysis_year, "-01-01"))
+analysis_end <- max(
+  last_beer_date,
+  ymd(paste0(year(last_beer_date), "-", month(last_beer_date), "-28"))
+)
+
+months_ordered <- month.name[seq_len(month(analysis_end))]
+n_days_month <- min(28L, day(analysis_end))
 
 c(
   last_logged_beer = as.character(last_beer_date),
   analysis_end = as.character(analysis_end)
 )
 
-date_grid <- data.frame(date = seq(analysis_start, analysis_end, by = "day"))
-date_grid$day <- seq_len(nrow(date_grid))
-date_grid$month_num <- as.integer(format(date_grid$date, "%m"))
-date_grid$month_name <- factor(month.name[date_grid$month_num], levels = month.name)
-date_grid$day_within_month <- as.integer(format(date_grid$date, "%d"))
+date_grid <- tibble(
+  date = seq(analysis_start, analysis_end, by = "day")
+) |>
+  mutate(
+    day = row_number(),
+    month_num = month(date),
+    month_name = factor(month.name[month_num], levels = month.name),
+    day_within_month = day(date)
+  )
 
-subject_lookup <- unique(beer_raw[c("navn", "sex")])
-subject_lookup <- subject_lookup[order(subject_lookup$navn), ]
-subject_lookup$subject <- seq_len(nrow(subject_lookup))
-subject_lookup$name <- paste("Friend", subject_lookup$subject)
-subject_lookup$name <- factor(subject_lookup$name, levels = subject_lookup$name)
-subject_lookup$sex <- factor(subject_lookup$sex, levels = c("F", "M"))
+subject_lookup <- beer_raw |>
+  distinct(navn, sex) |>
+  arrange(navn) |>
+  mutate(
+    subject = row_number(),
+    name = factor(paste("Friend", subject), levels = paste("Friend", subject)),
+    sex = factor(sex, levels = c("F", "M"))
+  )
 
-daily_totals <- aggregate(beer ~ navn + sex + date, beer_raw, sum)
+daily_totals <- beer_raw |>
+  group_by(navn, sex, date) |>
+  summarise(beer = sum(beer), .groups = "drop")
 
-beer_daily <- merge(subject_lookup, date_grid, by = NULL)
-beer_daily <- merge(
-  beer_daily,
-  daily_totals,
-  by = c("navn", "sex", "date"),
-  all.x = TRUE,
-  sort = FALSE
-)
-beer_daily$beer[is.na(beer_daily$beer)] <- 0
-beer_daily <- beer_daily[order(beer_daily$subject, beer_daily$day), ]
-beer_daily$beer_gain <- ave(beer_daily$beer, beer_daily$subject, FUN = cumsum)
+beer_daily <- subject_lookup |>
+  crossing(date_grid) |>
+  left_join(daily_totals, by = c("navn", "sex", "date")) |>
+  mutate(beer = replace_na(beer, 0)) |>
+  arrange(subject, day) |>
+  group_by(subject) |>
+  mutate(beer_gain = cumsum(beer)) |>
+  ungroup()
 
-head(beer_daily[c("name", "sex", "date", "day", "beer", "beer_gain")])
-aggregate(beer ~ date, subset(beer_daily, date >= analysis_end - 1L), sum)
+beer_daily |>
+  select(name, sex, date, day, beer, beer_gain) |>
+  head()
+
+beer_daily |>
+  filter(date >= analysis_end - days(1)) |>
+  group_by(date) |>
+  summarise(beer = sum(beer), .groups = "drop")
 ```
 
 ### Full-Period Curves
@@ -138,15 +154,16 @@ the last available day. The right endpoint of such a curve is the subject's
 total beer gain over the full tracker period.
 
 ```{r full-period-curves}
-full_period_df <- transform(
-  beer_daily,
-  time = day,
-  y = beer_gain,
-  curve = name
-)
+full_period_df <- beer_daily |>
+  mutate(
+    time = day,
+    y = beer_gain,
+    curve = name
+  )
 
-full_curve_meta <- unique(full_period_df[c("curve", "subject", "name", "sex")])
-full_curve_meta <- full_curve_meta[order(full_curve_meta$subject), ]
+full_curve_meta <- full_period_df |>
+  distinct(curve, subject, name, sex) |>
+  arrange(subject)
 
 ggplot(full_period_df, aes(time, y, colour = sex)) +
   geom_line(aes(group = name), alpha = 0.3, linewidth = 0.4) +
@@ -183,52 +200,43 @@ all months on the same time grid, this vignette uses the common number of
 available days, capped at 28.
 
 ```{r monthly-curves}
-beer_monthly_df <- subset(
-  beer_daily,
-  month_name %in% months_ordered & day_within_month <= n_days_month
-)
-beer_monthly_df <- beer_monthly_df[
-  order(
-    beer_monthly_df$subject,
-    beer_monthly_df$month_num,
-    beer_monthly_df$day_within_month
-  ),
-]
-beer_monthly_df$monthly_cumsum <- ave(
-  beer_monthly_df$beer,
-  beer_monthly_df$subject,
-  beer_monthly_df$month_num,
-  FUN = cumsum
-)
-beer_monthly_df$month_name <- factor(
-  as.character(beer_monthly_df$month_name),
-  levels = months_ordered
-)
-beer_monthly_df$curve <- paste(beer_monthly_df$name, beer_monthly_df$month_name, sep = ": ")
+beer_monthly_df <- beer_daily |>
+  filter(
+    month_name %in% months_ordered,
+    day_within_month <= n_days_month
+  ) |>
+  arrange(subject, month_num, day_within_month) |>
+  group_by(subject, month_num) |>
+  mutate(monthly_cumsum = cumsum(beer)) |>
+  ungroup() |>
+  mutate(
+    month_name = factor(as.character(month_name), levels = months_ordered),
+    curve = paste(name, month_name, sep = ": ")
+  )
 
-curve_meta <- unique(
-  beer_monthly_df[c("curve", "subject", "name", "sex", "month_name", "month_num")]
-)
-curve_meta <- curve_meta[order(curve_meta$subject, curve_meta$month_num), ]
-curve_meta$curve <- factor(curve_meta$curve, levels = curve_meta$curve)
-curve_meta$name <- factor(curve_meta$name, levels = levels(subject_lookup$name))
-curve_meta$sex <- factor(curve_meta$sex, levels = c("F", "M"))
-curve_meta$month_name <- factor(curve_meta$month_name, levels = months_ordered)
-beer_monthly_df$curve <- factor(beer_monthly_df$curve, levels = levels(curve_meta$curve))
+curve_meta <- beer_monthly_df |>
+  distinct(curve, subject, name, sex, month_name, month_num) |>
+  arrange(subject, month_num) |>
+  mutate(
+    curve = factor(curve, levels = curve),
+    name = factor(name, levels = levels(subject_lookup$name)),
+    sex = factor(sex, levels = c("F", "M")),
+    month_name = factor(month_name, levels = months_ordered)
+  )
 
-head(
-  beer_monthly_df[
-    c("name", "month_name", "day_within_month", "beer", "monthly_cumsum", "curve")
-  ]
-)
+beer_monthly_df <- beer_monthly_df |>
+  mutate(curve = factor(curve, levels = levels(curve_meta$curve)))
+
+beer_monthly_df |>
+  select(name, month_name, day_within_month, beer, monthly_cumsum, curve) |>
+  head()
 ```
 
 ```{r monthly-plot}
-monthly_means <- aggregate(
-  monthly_cumsum ~ month_name + day_within_month,
-  beer_monthly_df,
-  mean
-)
+monthly_means <- beer_monthly_df |>
+  group_by(month_name, day_within_month) |>
+  summarise(monthly_cumsum = mean(monthly_cumsum), .groups = "drop")
+
 month_cols <- setNames(
   grDevices::hcl.colors(length(months_ordered), "Dark 3"),
   months_ordered
@@ -254,17 +262,13 @@ the data-preparation code above created the full set of monthly curves.
 ```{r model-data}
 model_subjects <- levels(subject_lookup$name)[1:4]
 
-curve_meta_model <- subset(curve_meta, name %in% model_subjects)
-curve_meta_model$curve <- factor(
-  as.character(curve_meta_model$curve),
-  levels = as.character(curve_meta_model$curve)
-)
+curve_meta_model <- curve_meta |>
+  filter(name %in% model_subjects) |>
+  mutate(curve = factor(as.character(curve), levels = as.character(curve)))
 
-beer_monthly_model <- subset(beer_monthly_df, name %in% model_subjects)
-beer_monthly_model$curve <- factor(
-  as.character(beer_monthly_model$curve),
-  levels = levels(curve_meta_model$curve)
-)
+beer_monthly_model <- beer_monthly_df |>
+  filter(name %in% model_subjects) |>
+  mutate(curve = factor(as.character(curve), levels = levels(curve_meta_model$curve)))
 
 c(
   observations = nrow(beer_monthly_model),
@@ -296,7 +300,7 @@ The main arguments are:
   function of month.
 - `right_boundary = right_boundary_operator_k1(alpha = c(0, 1))`: define the
   right boundary operator as endpoint derivative, so the fitted `rho` is the
-  month-end derivative. 
+  month-end derivative.
 - `operator = operator_laplace()`: use the K.order = 1 pure Laplace operator
   `L f = -lambda_d2 f''`. The shifted operator is available via
   `operator_k1(lambda_start = c(1, 1))`.
@@ -332,17 +336,17 @@ the same common diagnostics with `ggplot2` so the plot style is consistent:
 - `"rho"`: estimated curve-specific right-boundary values.
 
 ```{r diagnostics}
-diagnostic_df <- data.frame(
+diagnostic_df <- tibble(
   observed = fit$data$y,
   fitted = as.numeric(predict(fit, type = "response")),
   residual = as.numeric(residuals(fit))
 )
 
-rho_df <- data.frame(
+rho_df <- tibble(
   curve = names(coef(fit, component = "rho")),
   rho = as.numeric(coef(fit, component = "rho"))
-)
-rho_df$curve <- factor(rho_df$curve, levels = rho_df$curve)
+) |>
+  mutate(curve = factor(curve, levels = curve))
 
 ggplot(diagnostic_df, aes(fitted, observed)) +
   geom_point(alpha = 0.65, size = 1.2) +
@@ -377,14 +381,11 @@ the homogeneous serial effect. For a well-behaved boundary-value decomposition,
 this quantity should be close to zero relative to the scale of `rho`.
 
 ```{r boundary-check}
-boundary_check_df <- data.frame(
+boundary_check_df <- tibble(
   curve = names(fit$right_boundary_serial_operator),
   right_operator = as.numeric(fit$right_boundary_serial_operator)
-)
-boundary_check_df$curve <- factor(
-  boundary_check_df$curve,
-  levels = boundary_check_df$curve
-)
+) |>
+  mutate(curve = factor(curve, levels = curve))
 
 ggplot(boundary_check_df, aes(curve, right_operator)) +
   geom_hline(yintercept = 0, colour = "grey40") +
@@ -409,9 +410,10 @@ emm_month
 pairs(emm_month)
 ```
 
-Because the right boundary is `alpha = c(0, 1)` these marginal means are estimated
-endpoint derivative. If the right boundary were `alpha = c(1,0)` the same 
-`emmeans()`call would summarize the month-end cumulative beer gains instead. 
+Because the right boundary is `alpha = c(0, 1)`, these marginal means are
+estimated endpoint derivatives. If the right boundary were `alpha = c(1, 0)`,
+the same `emmeans()` call would summarize the month-end cumulative beer gains
+instead.
 
 ## Extract Fitted Curves
 
@@ -421,30 +423,27 @@ curve-time ordering, so the data are sorted by `curve` and time before adding
 them.
 
 ```{r extract-fitted}
-fitted_curves <- beer_monthly_model[
-  order(beer_monthly_model$curve, beer_monthly_model$day_within_month),
-]
-fitted_curves$fitted <- as.numeric(predict(fit, type = "response"))
-fitted_curves$boundary_effect <- as.numeric(predict(fit, type = "boundary"))
-fitted_curves$serial_effect <- as.numeric(predict(fit, type = "serial"))
-fitted_curves$residual <- as.numeric(residuals(fit))
+fitted_curves <- beer_monthly_model |>
+  arrange(curve, day_within_month) |>
+  mutate(
+    fitted = as.numeric(predict(fit, type = "response")),
+    boundary_effect = as.numeric(predict(fit, type = "boundary")),
+    serial_effect = as.numeric(predict(fit, type = "serial")),
+    residual = as.numeric(residuals(fit))
+  )
 
-head(
-  fitted_curves[
-    c(
-      "name", "month_name", "day_within_month", "monthly_cumsum",
-      "fitted", "boundary_effect", "serial_effect", "residual"
-    )
-  ]
-)
+fitted_curves |>
+  select(
+    name, month_name, day_within_month, monthly_cumsum,
+    fitted, boundary_effect, serial_effect, residual
+  ) |>
+  head()
 ```
 
 ```{r fitted-plot}
-fitted_month_means <- aggregate(
-  fitted ~ month_name + day_within_month,
-  fitted_curves,
-  mean
-)
+fitted_month_means <- fitted_curves |>
+  group_by(month_name, day_within_month) |>
+  summarise(fitted = mean(fitted), .groups = "drop")
 
 ggplot(fitted_month_means, aes(day_within_month, fitted, colour = month_name)) +
   geom_line(linewidth = 1) +
@@ -476,49 +475,55 @@ This example therefore uses `right_boundary = c(0, 1)` and a boundary
 regression `rho ~ sex`.
 
 ```{r weekly-curves}
-beer_weekly_daily <- beer_daily
-raw_week_num <- ((beer_weekly_daily$day - 1L) %/% 7L) + 1L
+beer_weekly_daily <- beer_daily |>
+  mutate(raw_week_num = ((day - 1L) %/% 7L) + 1L)
 
-last_raw_week <- max(raw_week_num)
-last_raw_week_total <- sum(beer_weekly_daily$beer[raw_week_num == last_raw_week])
-if (last_raw_week_total == 0 && last_raw_week > 1L) {
-  raw_week_num[raw_week_num == last_raw_week] <- last_raw_week - 1L
-}
+last_raw_week <- max(beer_weekly_daily$raw_week_num)
 
-beer_weekly_daily$week_num <- raw_week_num
+last_raw_week_total <- beer_weekly_daily |>
+  filter(raw_week_num == last_raw_week) |>
+  summarise(total = sum(beer), .groups = "drop") |>
+  pull(total)
+
+beer_weekly_daily <- beer_weekly_daily |>
+  mutate(
+    week_num = if_else(
+      last_raw_week_total == 0 & last_raw_week > 1L & raw_week_num == last_raw_week,
+      last_raw_week - 1L,
+      raw_week_num
+    )
+  )
+
 n_weeks <- max(beer_weekly_daily$week_num)
 
-beer_weekly_df <- aggregate(
-  beer ~ subject + name + sex + week_num,
-  beer_weekly_daily,
-  sum
-)
-names(beer_weekly_df)[names(beer_weekly_df) == "beer"] <- "weekly_beers"
-beer_weekly_df <- beer_weekly_df[order(beer_weekly_df$subject, beer_weekly_df$week_num), ]
-beer_weekly_df$week_index <- beer_weekly_df$week_num - 1L
-beer_weekly_df$week_label <- factor(
-  paste("Week", beer_weekly_df$week_index),
-  levels = paste("Week", seq_len(n_weeks) - 1L)
-)
-beer_weekly_df$curve <- beer_weekly_df$name
+beer_weekly_df <- beer_weekly_daily |>
+  group_by(subject, name, sex, week_num) |>
+  summarise(weekly_beers = sum(beer), .groups = "drop") |>
+  arrange(subject, week_num) |>
+  mutate(
+    week_index = week_num - 1L,
+    week_label = factor(
+      paste("Week", week_index),
+      levels = paste("Week", seq_len(n_weeks) - 1L)
+    ),
+    curve = name
+  )
 
-weekly_curve_meta <- unique(
-  beer_weekly_df[c("curve", "subject", "name", "sex")]
-)
-weekly_curve_meta <- weekly_curve_meta[order(weekly_curve_meta$subject), ]
-weekly_curve_meta$curve <- factor(weekly_curve_meta$curve, levels = weekly_curve_meta$curve)
-weekly_curve_meta$name <- factor(weekly_curve_meta$name, levels = levels(subject_lookup$name))
-weekly_curve_meta$sex <- factor(weekly_curve_meta$sex, levels = c("F", "M"))
-beer_weekly_df$curve <- factor(
-  beer_weekly_df$curve,
-  levels = levels(weekly_curve_meta$curve)
-)
+weekly_curve_meta <- beer_weekly_df |>
+  distinct(curve, subject, name, sex) |>
+  arrange(subject) |>
+  mutate(
+    curve = factor(curve, levels = curve),
+    name = factor(name, levels = levels(subject_lookup$name)),
+    sex = factor(sex, levels = c("F", "M"))
+  )
 
-head(
-  beer_weekly_df[
-    c("name", "sex", "week_index", "week_label", "weekly_beers", "curve")
-  ]
-)
+beer_weekly_df <- beer_weekly_df |>
+  mutate(curve = factor(curve, levels = levels(weekly_curve_meta$curve)))
+
+beer_weekly_df |>
+  select(name, sex, week_index, week_label, weekly_beers, curve) |>
+  head()
 ```
 
 ```{r weekly-plot}
@@ -551,7 +556,7 @@ fit_weekly <- fdaLm_rtmb(
 c(
   observations = nrow(beer_weekly_df),
   curves = nlevels(beer_weekly_df$curve),
-  weeks_per_curve = length(unique(beer_weekly_df$week_num)),
+  weeks_per_curve = n_distinct(beer_weekly_df$week_num),
   converged = fit_weekly$converged
 )
 ```
@@ -572,7 +577,7 @@ pairs(emm_weekly_slope)
 ```
 
 ```{r weekly-slope-plot}
-weekly_slope_df <- as.data.frame(emm_weekly_slope)
+weekly_slope_df <- as_tibble(emm_weekly_slope)
 
 ggplot(weekly_slope_df, aes(sex, emmean, colour = sex)) +
   geom_hline(yintercept = 0, colour = "grey45") +
@@ -591,29 +596,24 @@ so this fit should be read as a functional-trajectory demonstration rather than
 as a full count model.
 
 ```{r weekly-fitted}
-weekly_fitted_curves <- beer_weekly_df[
-  order(beer_weekly_df$curve, beer_weekly_df$week_index),
-]
-weekly_fitted_curves$fitted <- as.numeric(predict(fit_weekly, type = "response"))
-weekly_fitted_curves$residual <- as.numeric(residuals(fit_weekly))
+weekly_fitted_curves <- beer_weekly_df |>
+  arrange(curve, week_index) |>
+  mutate(
+    fitted = as.numeric(predict(fit_weekly, type = "response")),
+    residual = as.numeric(residuals(fit_weekly))
+  )
 
-weekly_mean_observed <- aggregate(
-  weekly_beers ~ sex + week_index,
-  weekly_fitted_curves,
-  mean
-)
-names(weekly_mean_observed)[names(weekly_mean_observed) == "weekly_beers"] <- "value"
-weekly_mean_observed$type <- "Observed mean"
+weekly_mean_observed <- weekly_fitted_curves |>
+  group_by(sex, week_index) |>
+  summarise(value = mean(weekly_beers), .groups = "drop") |>
+  mutate(type = "Observed mean")
 
-weekly_mean_fitted <- aggregate(
-  fitted ~ sex + week_index,
-  weekly_fitted_curves,
-  mean
-)
-names(weekly_mean_fitted)[names(weekly_mean_fitted) == "fitted"] <- "value"
-weekly_mean_fitted$type <- "Fitted mean"
+weekly_mean_fitted <- weekly_fitted_curves |>
+  group_by(sex, week_index) |>
+  summarise(value = mean(fitted), .groups = "drop") |>
+  mutate(type = "Fitted mean")
 
-weekly_mean_plot <- rbind(weekly_mean_observed, weekly_mean_fitted)
+weekly_mean_plot <- bind_rows(weekly_mean_observed, weekly_mean_fitted)
 
 ggplot(weekly_mean_plot, aes(week_index, value, colour = sex, linetype = type)) +
   geom_line(linewidth = 1) +
@@ -627,8 +627,6 @@ ggplot(weekly_mean_plot, aes(week_index, value, colour = sex, linetype = type)) 
     linetype = NULL
   )
 ```
-
-
 
 ## Known Limitations
 
